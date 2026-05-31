@@ -80,56 +80,96 @@ labelRing.position.y = -2;
 scene.add(labelRing);
 
 // ========== 音频设置 ==========
+let audioCtx: AudioContext;
 let analyser: AnalyserNode;
 let freqData: any;
 let waveData: any;
 let beatEnergy = 0;
 let beatThreshold = 80;
 const freqHistory: number[] = new Array(32).fill(0);
+let currentSource: AudioBufferSourceNode | MediaStreamAudioSourceNode | null = null;
 
 async function initAudio() {
   const overlay = document.getElementById('overlay')!;
+  audioCtx = new AudioContext();
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 512;
+  analyser.smoothingTimeConstant = 0.8;
+  freqData = new Uint8Array(analyser.frequencyBinCount);
+  waveData = new Uint8Array(analyser.frequencyBinCount);
+
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const ctx = new AudioContext();
-    const src = ctx.createMediaStreamSource(stream);
-    analyser = ctx.createAnalyser();
-    analyser.fftSize = 512;
-    analyser.smoothingTimeConstant = 0.8;
+    const src = audioCtx.createMediaStreamSource(stream);
     src.connect(analyser);
-    freqData = new Uint8Array(analyser.frequencyBinCount);
-    waveData = new Uint8Array(analyser.frequencyBinCount);
+    currentSource = src;
     overlay.classList.remove('show');
   } catch {
-    // 无麦克风: 用振荡器生成节拍
-    overlay.innerHTML = '🔊 演示模式<br><span style="font-size:13px;color:#888">无麦克风,使用内置节拍</span>';
+    // 无麦克风: 内置节拍器
+    overlay.innerHTML = '🔊 演示模式 · 拖拽音频文件到页面播放<br><span style="font-size:13px;color:#888">无麦克风,使用内置节拍</span>';
     overlay.classList.add('show');
     setTimeout(() => overlay.classList.remove('show'), 3000);
-    const ctx = new AudioContext();
-    analyser = ctx.createAnalyser();
-    analyser.fftSize = 512;
-    analyser.smoothingTimeConstant = 0.8;
-    freqData = new Uint8Array(analyser.frequencyBinCount);
-    waveData = new Uint8Array(analyser.frequencyBinCount);
-
-    // 简易节拍器: 周期产生脉冲
-    let phase = 0;
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    gain.gain.value = 1;
-    osc.frequency.value = 80;
-    osc.type = 'square';
-    osc.connect(gain);
-    gain.connect(analyser);
-    osc.start();
-
-    // 节拍模式: 每0.5秒触发一次
-    setInterval(() => {
-      gain.gain.value = 1;
-      setTimeout(() => { gain.gain.value = 0.3; }, 80);
-    }, 500);
+    startDemoBeat();
   }
 }
+
+function startDemoBeat() {
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  gain.gain.value = 1;
+  osc.frequency.value = 80; osc.type = 'square';
+  osc.connect(gain); gain.connect(analyser);
+  osc.start();
+  setInterval(() => { gain.gain.value = 1; setTimeout(() => { gain.gain.value = 0.3; }, 80); }, 500);
+}
+
+// ========== 音频文件加载 ==========
+function loadAudioFile(file: File) {
+  if (!audioCtx) return;
+  const reader = new FileReader();
+  reader.onload = async (e) => {
+    try {
+      const buffer = await audioCtx.decodeAudioData(e.target!.result as ArrayBuffer);
+      playBuffer(buffer);
+      const hint = document.getElementById('info')!;
+      hint.textContent = `🎵 ${file.name} · 拖拽换歌`;
+      hint.style.color = '#0ff';
+    } catch { /* 格式不支持 */ }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function playBuffer(buffer: AudioBuffer) {
+  if (currentSource) { try { (currentSource as any).disconnect?.(); } catch {} }
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  const src = audioCtx.createBufferSource();
+  src.buffer = buffer;
+  src.connect(analyser);
+  analyser.connect(audioCtx.destination); // 输出到扬声器
+  src.start();
+  currentSource = src;
+}
+
+// 拖拽上传
+document.addEventListener('dragover', e => { e.preventDefault(); e.stopPropagation(); });
+document.addEventListener('drop', e => {
+  e.preventDefault(); e.stopPropagation();
+  const files = e.dataTransfer?.files;
+  if (files && files.length > 0) {
+    const f = files[0];
+    if (f.type.startsWith('audio/') || /\.(mp3|wav|ogg|flac|m4a|aac)$/i.test(f.name)) {
+      loadAudioFile(f);
+    }
+  }
+});
+
+// 点击页面选文件
+document.addEventListener('click', () => {
+  const input = document.createElement('input');
+  input.type = 'file'; input.accept = 'audio/*';
+  input.onchange = () => { if (input.files?.[0]) loadAudioFile(input.files[0]); };
+  input.click();
+});
 
 initAudio();
 
