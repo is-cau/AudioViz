@@ -1,0 +1,1 @@
+import{defineConfig}from'vite';export default defineConfig({base:'/AudioViz/',build:{target:'es2020'}});
